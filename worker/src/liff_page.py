@@ -110,8 +110,7 @@ function render(data) {
   document.getElementById('page').innerHTML =
     '<span class="status ' + data.status + '">' + statusLabel + '</span>' +
     '<div style="margin:6px 0 10px;">' +
-      '<button class="link-btn" onclick="startDocEdit()">✏️ 編輯文件</button>　' +
-      '<button class="link-btn" onclick="toggleDocHistory()">🕘 編輯紀錄</button>' +
+      '<button class="link-btn" onclick="startDocEdit()">✏️ 編輯文件</button>' +
     '</div>' +
     '<div id="docView">' + itineraryBody + '</div>' +
     '<div id="docEditForm" style="display:none">' +
@@ -122,13 +121,18 @@ function render(data) {
         '<button class="link-btn" onclick="cancelDocEdit()">取消</button>' +
       '</div>' +
     '</div>' +
-    '<div id="docHistory" style="display:none"></div>' +
     '<h2>💰 記帳</h2>' +
     '<pre id="settlementText"></pre>' +
     '<div id="expenseList"></div>' +
     renderExpenseForm() +
     '<h2>🗳️ 投票</h2>' +
-    '<div id="pollSection"></div>';
+    '<div id="pollSection"></div>' +
+    // Deliberately last on the page, collapsed by default (link-btn toggle, same as
+    // before) - reported live as feeling intrusive up near the doc itself.
+    '<div style="margin:24px 0 6px;">' +
+      '<button class="link-btn" onclick="toggleDocHistory()">🕘 編輯紀錄</button>' +
+    '</div>' +
+    '<div id="docHistory" style="display:none"></div>';
 
   document.getElementById('settlementText').textContent = data.settlement;
   document.getElementById('expenseList').innerHTML = data.expenses.map(renderExpenseCard).join('') ||
@@ -192,8 +196,12 @@ async function toggleDocHistory() {
 }
 
 function renderDocHistory(revisions) {
-  if (!revisions.length) return '<p style="color:#888">還沒有任何紀錄</p>';
-  return revisions.map((r, i) => {
+  // Only the 3 most recent - this is a "did someone break it, can I undo" safety net, not a
+  // full audit log page, so keep it compact. DOC_HISTORY itself still holds up to 30 (fetched
+  // as-is from the API) so the indices used by viewDocRevision(i) below stay valid.
+  const shown = revisions.slice(0, 3);
+  if (!shown.length) return '<p style="color:#888">還沒有任何紀錄</p>';
+  return shown.map((r, i) => {
     const time = new Date(r.created_at * 1000).toLocaleString('zh-TW', { hour12: false });
     return '<div class="card"><div class="row">' +
       '<div><strong>' + escapeHtml(r.editor) + '</strong><div class="meta">' + time + '</div></div>' +
@@ -222,6 +230,10 @@ function viewDocRevision(index) {
       '</div>' +
     '</div>' +
     DOMPurify.sanitize(marked.parse(decorateHeadings(r.content_md)));
+  // 編輯紀錄 lives at the very bottom of the page now - "查看" swaps in content up at
+  // docView near the top, which would otherwise happen silently off-screen from where the
+  // click just happened.
+  view.scrollIntoView({ behavior: 'smooth' });
 }
 
 async function restoreDocRevision(revisionId) {
