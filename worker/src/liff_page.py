@@ -182,6 +182,10 @@ async function toggleDocHistory() {
     DOC_HISTORY = data.revisions;
     el.innerHTML = renderDocHistory(DOC_HISTORY);
     el.style.display = 'block';
+    // The list renders below the whole doc body - on a phone screen that's well off the
+    // bottom of the viewport, so without this the button visibly does nothing (reported live:
+    // "按了沒有反應" - it had actually worked, just out of view below the fold).
+    el.scrollIntoView({ behavior: 'smooth' });
   } catch (e) {
     alert('讀取編輯紀錄失敗，請稍後再試');
   }
