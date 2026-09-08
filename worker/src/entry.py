@@ -82,30 +82,34 @@ class Default(WorkerEntrypoint):
         active = await self.env.DB.prepare("SELECT id FROM trips WHERE status = 'active'").all()
         for trip in active.results:
             try:
-                # 600s (10min) + a much larger batch cap, not the webhook path's tight
-                # defaults: scheduled() has its own ~15min wall-clock budget (Cloudflare cron
-                # limit), not the ~30s ctx.waitUntil() ceiling /整理 and /問 share. Learned the
-                # hard way - the 20s timeout default alone made every hourly auto-organize fail
-                # once the backlog grew past what a quick call could fold in, and since a failed
-                # attempt leaves organized_at unset, the backlog only grew further each missed
-                # hour. 180s later proved not generous enough either (found live: a small,
-                # unremarkable batch consistently took Claude longer than that to respond, for
-                # reasons never fully pinned down - not a platform kill, a clean client-side
-                # APITimeoutError). 600s leaves ~5min of headroom under the real 15min ceiling
-                # for D1 queries, other active trips in the same sweep, and the fact_check call
-                # that follows - deliberately NOT set to the full 15min, since hitting that wall
-                # instead of our own timeout reproduces the exact "no catchable exception"
-                # platform-kill problem this whole timeout parameter exists to avoid. Raising
-                # this costs nothing extra even on failure - Anthropic bills for tokens actually
+                # 300s read + 300s connect + a much larger batch cap, not the webhook path's
+                # tight defaults: scheduled() has its own ~15min wall-clock budget (Cloudflare
+                # cron limit), not the ~30s ctx.waitUntil() ceiling /整理 and /問 share. Learned
+                # the hard way - the 20s timeout default alone made every hourly auto-organize
+                # fail once the backlog grew past what a quick call could fold in, and since a
+                # failed attempt leaves organized_at unset, the backlog only grew further each
+                # missed hour. 180s later proved not generous enough either (found live: a
+                # small, unremarkable batch consistently took Claude longer than that to
+                # respond, for reasons never fully pinned down - not a platform kill, a clean
+                # client-side APITimeoutError). read+connect worst case is deliberately kept
+                # around 600s total, well under the real 15min ceiling, leaving ~5min of
+                # headroom for D1 queries, other active trips in the same sweep, and the
+                # fact_check call that follows - hitting that 15min wall instead of our own
+                # timeout would reproduce the exact "no catchable exception" platform-kill
+                # problem this whole timeout parameter exists to avoid. Raising either one costs
+                # nothing extra even on failure - the provider bills for tokens actually
                 # generated, not for however long we waited to receive them.
                 _t0 = time.time()
-                # connect_timeout=90.0, not the webhook-safe 30.0 default: live diagnostics
-                # (elapsed=30.4s, cause_chain=['ConnectTimeout', 'AbortError']) showed the
-                # actual failure is in the connect phase, not the read phase - raising
-                # read_timeout to 600s above did nothing because it was never the bottleneck.
+                # connect_timeout=300.0, not the webhook-safe 30.0 default: live diagnostics
+                # (elapsed=30.4s, cause_chain=['ConnectTimeout', 'AbortError']) showed a past
+                # failure was in the connect phase, not the read phase - raising read_timeout
+                # alone did nothing that time because it wasn't the bottleneck. Widened from the
+                # original 90.0 to give a slow/flaky connect more room to recover on its own
+                # before giving up - read_timeout dropped from 600.0 to 300.0 in the same move so
+                # the combined worst case doesn't grow past the ~600s total budget above.
                 result = await organize_trip(
-                    self.env, trip["id"], read_timeout=600.0, max_batch_chars=CRON_MAX_BATCH_CHARS,
-                    connect_timeout=90.0,
+                    self.env, trip["id"], read_timeout=300.0, max_batch_chars=CRON_MAX_BATCH_CHARS,
+                    connect_timeout=300.0,
                 )  # no-ops cheaply if nothing pending
             except Exception as e:
                 # temporary: elapsed time + full cause chain, to tell "genuinely waited out a
