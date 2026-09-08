@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
-from claude_client import call_claude, get_model
+from llm_client import call_llm, get_model
 
 # How many already-organized messages to show as context before the new batch, so the LLM
 # can resolve references/follow-ups that span a cron boundary (e.g. "還沒定" answering a
@@ -29,7 +29,7 @@ CONTEXT_MESSAGE_COUNT = 15
 # ceiling no matter the batch size. This default is deliberately conservative for that path.
 MAX_BATCH_CHARS = 800
 # Cron's read_timeout=180.0 is already caller-supplied for the same reason (see
-# claude_client.call_claude) - scheduled() has its own ~15min budget, not the webhook's ~30s
+# llm_client.call_llm) - scheduled() has its own ~15min budget, not the webhook's ~30s
 # one, and a live cron run just proved it can clear an 800-char batch in a few seconds. Reusing
 # the webhook's tiny cap there wastes that budget and needlessly strings a big backlog across
 # many more hourly ticks than necessary. Batch size gets the same per-caller treatment.
@@ -191,7 +191,7 @@ async def organize_trip(
     )
 
     model = await get_model(env, "organize")
-    new_doc = await call_claude(
+    new_doc = await call_llm(
         env, "organize", trip_id, model, SYSTEM_PROMPT, user_content,
         read_timeout=read_timeout, connect_timeout=connect_timeout,
     )

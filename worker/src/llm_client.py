@@ -3,12 +3,16 @@ import time
 import uuid
 
 import anthropic
+import httpx
 import httpx2
+import openai
 
-# USD per 1M tokens, Anthropic first-party pricing. Update this table if pricing changes.
+# USD per 1M tokens, first-party pricing (Anthropic + OpenAI). Update this table if pricing changes.
 MODEL_PRICES = {
     "claude-sonnet-5": {"input": 2.00, "output": 10.00},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+    "gpt-5": {"input": 1.25, "output": 10.00},
+    "gpt-5-mini": {"input": 0.25, "output": 2.00},
 }
 
 # Default model per LLM stage. Overridable at runtime via the `settings` table (get_model /
@@ -26,10 +30,13 @@ _DEFAULT_MODEL = {
 
 # Short names /模型 accepts, mapped to real model IDs. Deliberately limited to models
 # MODEL_PRICES actually has pricing for - selecting anything else would silently track cost
-# as $0 rather than the real amount.
+# as $0 rather than the real amount. Provider is inferred from the model ID prefix (call_llm
+# below), not stored separately - "gpt-" -> OpenAI, everything else -> Anthropic.
 MODEL_ALIASES = {
     "sonnet": "claude-sonnet-5",
     "haiku": "claude-haiku-4-5",
+    "gpt5": "gpt-5",
+    "gpt5mini": "gpt-5-mini",
 }
 
 
@@ -58,7 +65,7 @@ async def model_settings_text(env) -> str:
     )
 
 
-async def call_claude(
+async def call_llm(
     env, purpose: str, trip_id: str | None, model: str, system: str, user_content: str,
     max_tokens: int = 8000, read_timeout: float = 20.0, connect_timeout: float = 30.0,
 ) -> str:
@@ -83,24 +90,39 @@ async def call_claude(
     # several missed cron ticks) legitimately needed more than a tight default to fold in, so
     # every cron attempt kept failing the same way and the backlog kept growing - a
     # self-reinforcing spiral. scheduled() now passes larger values for both; the tight defaults
-    # stay for the webhook path where they're actually required.
-    # max_retries=0: the SDK retries APITimeoutError/APIConnectionError by default (up to 2x),
-    # which would let 3 attempts at connect_timeout each add up to 3x that - blowing past
-    # Cloudflare's 30s ctx.waitUntil() budget for /整理 and /問 and getting the whole task
-    # killed with no reply at all, the exact "worse than the original bug" failure already hit
-    # once this session with a manual retry wrapper. One clean attempt, one clean failure.
+    # stay for the webhook path where they're actually required. Same reasoning applies to the
+    # OpenAI path below - it's a Cloudflare ctx.waitUntil()/cron budget problem, not an
+    # Anthropic-specific one.
+    # max_retries=0: both SDKs retry timeout/connection errors by default (up to 2x), which
+    # would let 3 attempts at connect_timeout each add up to 3x that - blowing past Cloudflare's
+    # 30s ctx.waitUntil() budget for /整理 and /問 and getting the whole task killed with no
+    # reply at all, the exact "worse than the original bug" failure already hit once this
+    # session with a manual retry wrapper. One clean attempt, one clean failure.
+    if model.startswith("gpt-"):
+        text, input_tokens, output_tokens = await _call_openai(
+            env, model, system, user_content, max_tokens, read_timeout, connect_timeout
+        )
+    else:
+        text, input_tokens, output_tokens = await _call_anthropic(
+            env, model, system, user_content, max_tokens, read_timeout, connect_timeout
+        )
+    await _log_usage(env, purpose, trip_id, model, input_tokens, output_tokens)
+    return text
+
+
+async def _call_anthropic(
+    env, model: str, system: str, user_content: str, max_tokens: int, read_timeout: float, connect_timeout: float,
+) -> tuple[str, int, int]:
     client = anthropic.AsyncAnthropic(
         api_key=env.ANTHROPIC_API_KEY,
         timeout=httpx2.Timeout(read_timeout, connect=connect_timeout),
         max_retries=0,
     )
-    # thinking explicitly disabled: observed live tonight - claude-sonnet-5 sometimes emits a
-    # 'thinking' block unprompted (no thinking param was ever set), consuming most of the
-    # output budget before the actual doc rewrite starts. Lowering max_tokens to "starve" it
-    # (tried first) just truncated the real output instead - two organize calls both hit
-    # exactly max_tokens=2000 with the document cut off mid-sentence. This task (rewrite a
-    # markdown doc per fixed rules) doesn't need reasoning; disabling it outright is the actual
-    # fix, not a smaller budget shared between thinking and the real answer.
+    # thinking explicitly disabled: observed live - claude-sonnet-5 sometimes emits a 'thinking'
+    # block unprompted (no thinking param was ever set), consuming most of the output budget
+    # before the actual doc rewrite starts. Lowering max_tokens to "starve" it (tried first) just
+    # truncated the real output instead. This task (rewrite a markdown doc per fixed rules)
+    # doesn't need reasoning; disabling it outright is the actual fix.
     response = await client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -108,12 +130,39 @@ async def call_claude(
         thinking={"type": "disabled"},
         messages=[{"role": "user", "content": user_content}],
     )
-    await _log_usage(env, purpose, trip_id, model, response.usage.input_tokens, response.usage.output_tokens)
-
+    text = ""
     for block in response.content:
         if block.type == "text":
-            return block.text
-    return ""
+            text = block.text
+            break
+    return text, response.usage.input_tokens, response.usage.output_tokens
+
+
+async def _call_openai(
+    env, model: str, system: str, user_content: str, max_tokens: int, read_timeout: float, connect_timeout: float,
+) -> tuple[str, int, int]:
+    client = openai.AsyncOpenAI(
+        api_key=env.OPENAI_API_KEY,
+        timeout=httpx.Timeout(read_timeout, connect=connect_timeout),
+        max_retries=0,
+    )
+    response = await client.chat.completions.create(
+        model=model,
+        max_completion_tokens=max_tokens,
+        # ponytail: reasoning_effort="minimal" is the OpenAI equivalent of the
+        # thinking={"type": "disabled"} fix above - gpt-5 is a reasoning model and defaults to
+        # spending part of max_completion_tokens on hidden reasoning tokens before the visible
+        # answer, same failure shape already hit once with Claude's unprompted thinking blocks.
+        # This task never needs reasoning, so skip it outright rather than re-discover the same
+        # bug live.
+        reasoning_effort="minimal",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ],
+    )
+    text = response.choices[0].message.content or ""
+    return text, response.usage.prompt_tokens, response.usage.completion_tokens
 
 
 async def _log_usage(env, purpose, trip_id, model, input_tokens, output_tokens) -> None:

@@ -1,4 +1,4 @@
-from claude_client import call_claude, get_model
+from llm_client import call_llm, get_model
 from icons import WARN
 from organize import get_doc_content, to_line_plaintext
 
@@ -19,6 +19,6 @@ async def answer_question(env, trip_id: str, question: str) -> str:
 
     user_content = f"旅程文件：\n{doc}\n\n---\n\n問題：{question}"
     model = await get_model(env, "answer")
-    answer = await call_claude(env, "answer", trip_id, model, SYSTEM_PROMPT, user_content, max_tokens=1024)
+    answer = await call_llm(env, "answer", trip_id, model, SYSTEM_PROMPT, user_content, max_tokens=1024)
     answer = to_line_plaintext(answer.strip())
     return answer or "🤔 不確定，文件裡沒有找到相關資訊"

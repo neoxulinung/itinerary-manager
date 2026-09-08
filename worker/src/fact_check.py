@@ -3,7 +3,7 @@ import re
 import time
 import uuid
 
-from claude_client import call_claude, get_model
+from llm_client import call_llm, get_model
 from icons import OK
 from log import log_error
 
@@ -38,7 +38,7 @@ async def fact_check_trip(env, trip_id: str, new_doc: str, batch_text: str) -> N
     # (~30s budget) - so it's safe to always use the same generous timeout, no need to thread
     # a parameter through like organize_trip does.
     model = await get_model(env, "fact_check")
-    raw = await call_claude(
+    raw = await call_llm(
         env, "fact_check", trip_id, model, SYSTEM_PROMPT, user_content, max_tokens=4096, read_timeout=120.0
     )
     try:

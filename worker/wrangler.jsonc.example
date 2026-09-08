@@ -45,7 +45,7 @@
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
 	 * Note: Use secrets (`wrangler secret put`) for sensitive data - see the README for the
 	 * full list of secrets this project needs (ANTHROPIC_API_KEY, LINE_CHANNEL_SECRET,
-	 * LINE_CHANNEL_ACCESS_TOKEN, and optionally ADMIN_USER_ID).
+	 * LINE_CHANNEL_ACCESS_TOKEN, and optionally ADMIN_USER_ID, OPENAI_API_KEY).
 	 */
 	"vars": {
 		// Enable public access on the R2 bucket above, then paste the "r2.dev" URL it gives

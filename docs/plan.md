@@ -194,9 +194,9 @@ attachments (
 
 從第一次有Claude呼叫（Phase 3的批次整理）開始就有，不是後補的功能：
 
-- 共用的 `call_claude(env, purpose, trip_id, model, system, user_content)` helper（`claude_client.py`），所有呼叫Claude的地方（整理、`/問`）都經過它。
-- Claude API的回應本身就附 `usage.input_tokens` / `usage.output_tokens`，helper呼叫完直接讀出來，不用自己算token。
-- 費用用程式碼裡一個寫死的價目表（`MODEL_PRICES`，每個用到的model對應每百萬input/output token的美金價格，Anthropic官網公告的固定費率）換算，寫進 `llm_usage.estimated_cost_usd`。之後Anthropic調價，改這個常數表即可。
+- 共用的 `call_llm(env, purpose, trip_id, model, system, user_content)` helper（`llm_client.py`，Phase B改名前叫`claude_client.py`／`call_claude`），所有呼叫LLM的地方（整理、`/問`、查核）都經過它，內部依model ID前綴分派給Anthropic或OpenAI。
+- 兩邊API的回應都附輸入/輸出token數（Anthropic是`usage.input_tokens`/`output_tokens`，OpenAI是`usage.prompt_tokens`/`completion_tokens`），helper呼叫完直接讀出來，不用自己算token。
+- 費用用程式碼裡一個寫死的價目表（`MODEL_PRICES`，每個用到的model對應每百萬input/output token的美金價格，各家官網公告的固定費率）換算，寫進 `llm_usage.estimated_cost_usd`。之後調價，改這個常數表即可。
 - `/花費` 指令：查這趟旅程累積量，再加一個不篩trip_id的總計，兩個數字一起回覆。
 
 ---
@@ -242,11 +242,25 @@ attachments (
 
 **權限設計**：查看任何人都能看，但**修改僅限admin**（`is_admin`，不含旅程擁有者）——這點刻意跟`/旅程 結束`的「擁有者或admin」不同，因為模型設定是影響全部旅程的系統層級設定，不是特定某趟旅程專屬的東西，不適合讓「剛好開了某趟旅程的人」也能動。
 
-**別名限制**：`/模型`只接受`MODEL_ALIASES`裡列出的別名（目前只有`sonnet`／`haiku`），刻意不開放任意輸入模型ID字串——避免選到`MODEL_PRICES`沒有報價的模型，導致花費追蹤悄悄變成算出$0而不自知。
+**別名限制**：`/模型`只接受`MODEL_ALIASES`裡列出的別名，刻意不開放任意輸入模型ID字串——避免選到`MODEL_PRICES`沒有報價的模型，導致花費追蹤悄悄變成算出$0而不自知。
 
 這個機制也順便把item 15那個「organize暫時改用haiku-4-5」的暫時措施正式化：`DEFAULT_ORGANIZE_MODEL`改回原本設計的`claude-sonnet-5`，然後手動在`settings`表寫入`organize_model=claude-haiku-4-5`這筆覆寫，讓目前的實際運作行為不變，但變成一個明確、可查詢、將來sonnet-5連線問題確認解決後可以直接下`/模型 整理 sonnet`切回去的設定，不用再改程式碼。
 
-OpenAI/ChatGPT支援列為Phase B，暫緩：現有的`call_claude`/連線層完全綁死Anthropic SDK跟這次踩到的Cloudflare Emscripten專屬問題（`httpx2_jsfetch`），真的要支援OpenAI等於要重新做一層provider抽象，也可能要重新走一次「在這個特殊執行環境下踩地雷」的過程，工作量遠大於Phase A，另外規劃。
+---
+
+## OpenAI（ChatGPT）模型支援（MVP後新增，Phase B）
+
+Phase A把model選擇做成資料庫設定後才發現：provider抽象其實幾乎不用另外做——`settings`表存的本來就只是一個model ID字串，`/模型`指令的邏輯完全不管這個字串代表哪家的模型，所以只要在真正發API呼叫的那一層依model ID分派，上層（`organize.py`／`qa.py`／`fact_check.py`／`entry.py`的`/模型`指令）完全不用改。
+
+**改動範圍**：
+- `claude_client.py`改名`llm_client.py`，`call_claude`改名`call_llm`：檔名/函式名稱不該只提Claude，因為現在也會呼叫OpenAI。
+- `call_llm`依`model`字串開頭分派：`gpt-`開頭走`_call_openai`（`openai.AsyncOpenAI`），其餘走`_call_anthropic`（原本的邏輯原封不動搬過去）。沒有額外存一個「provider」欄位——用字串前綴判斷就夠，兩家的命名习慣本來就不會撞。
+- `MODEL_PRICES`/`MODEL_ALIASES`新增`gpt-5`（別名`gpt5`）、`gpt-5-mini`（別名`gpt5mini`），跟現有sonnet/haiku兩層（貴/準 vs. 便宜/快）對齊，價格取自OpenAI官網pricing頁。
+- 新增`OPENAI_API_KEY`為**選用**secret（比照`ADMIN_USER_ID`的模式，`.dev.vars.example`／`wrangler.jsonc.example`都註明可留空），不設定就代表這個fork不啟用OpenAI選項，`/模型`指令本身邏輯不變、只是`gpt5`/`gpt5mini`這兩個別名選了以後第一次呼叫才會因為`api_key`是`None`而失敗（跟`ANTHROPIC_API_KEY`沒設會怎樣是一樣的失敗模式，沒有另外加防呆）。
+
+**踩到的坑（提早避開，沒有真的在production炸過）**：Phase A那次修`claude_client.py`時才發現sonnet-5會不受控制地吐一段`thinking`內容、吃光`max_tokens`額度，加`thinking={"type": "disabled"}`才解決。GPT-5一樣是有內建reasoning的模型，Chat Completions API預設也會用一部分`max_completion_tokens`額度做看不到的reasoning——同一種坑，這次直接在`_call_openai`裡加`reasoning_effort="minimal"`跳過，不用等真的在正式環境撞到才修。另外Chat Completions對reasoning模型要求用`max_completion_tokens`而不是舊的`max_tokens`參數，兩家API的timeout物件也不同型別（`httpx2.Timeout` vs. `httpx.Timeout`，OpenAI SDK底層用的是一般`httpx`，跟`line_client.py`共用同一個Cloudflare Emscripten相容的vendored版本，不需要`httpx2`那個Anthropic專屬的fork）。
+
+**技術可行性驗證**：`openai` PyPI套件（連同它的依賴`distro`/`jiter`/`tqdm`等）已確認能透過`pywrangler sync`解析成純Python／pyodide wasm wheel裝進`python_modules`，沒有C extension相依問題——這是這次真正要驗證的風險（過去踩`httpx2_jsfetch`的坑就是Cloudflare這個Pyodide執行環境的特殊限制，擔心OpenAI SDK也會有類似地雷），目前看起來沒事，但實際一次真正的line上呼叫還是要等設定好`OPENAI_API_KEY`才能驗證到底。
 
 ---
 

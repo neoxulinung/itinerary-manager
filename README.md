@@ -54,7 +54,7 @@ always shows the live, in-app version of this list.
 | `/問 <question>` | Answers strictly from the trip document — never guesses, says "not decided yet" if the doc doesn't cover it. | `/問 我們住哪間飯店` → an answer grounded in what was actually discussed, or `⚠️ 還沒決定` |
 | `/未定事項` | Lists everything still open/undecided. | `/未定事項` → the current "未定事項" section as plain text |
 | `/懶人包` | Sends a LIFF page link (timeline, expenses, poll all in one page). | `/懶人包` → a LINE button template linking to the LIFF page |
-| `/花費` | Shows accumulated Anthropic API cost for this trip and overall. | `/花費` → `🤖 這趟旅程：12次AI呼叫，約 US$0.0187（輸入9,204／輸出2,150 tokens）` |
+| `/花費` | Shows accumulated LLM API cost for this trip and overall. | `/花費` → `🤖 這趟旅程：12次AI呼叫，約 US$0.0187（輸入9,204／輸出2,150 tokens）` |
 | `/結算` | Shows the current expense settlement without ending the trip. | `/結算` → who owes whom, computed with a greedy settle-up |
 
 **💰 Expenses**
@@ -84,6 +84,7 @@ to avoid every vote being its own chat message.
 | --- | --- | --- |
 | `/整理` | Manually triggers the organize step (normally runs hourly on its own). | `/整理` → `✅ 整理完成，處理了 8 則訊息。` or `⚠️ 目前沒有新訊息可整理` |
 | `/檢查` | Shows anything the fact-check pass flagged as unsupported by the source messages. | `/檢查` → a list of suspect claims + why, or `✅ 目前沒有發現可疑內容` |
+| `/模型` | Shows which model each stage (organize/answer/fact-check) is using; with args, changes it (admin-only). | `/模型` → current settings; `/模型 整理 sonnet` → `✅ 已把「整理」的模型設定為 claude-sonnet-5` |
 | `/說明` | Shows the full command list. | — |
 
 ## Design choices worth knowing before you deploy this
@@ -108,8 +109,10 @@ to avoid every vote being its own chat message.
   history, expenses, polls, LLM usage/cost tracking.
 - **R2** for photo backups.
 - **Anthropic API** (`claude-sonnet-5` for organizing, `claude-haiku-4-5` for Q&A and
-  fact-checking) via the official Python SDK — the sync client doesn't work under Workers,
-  `AsyncAnthropic` is required.
+  fact-checking, by default) via the official Python SDK — the sync client doesn't work under
+  Workers, `AsyncAnthropic` is required. Which model runs each stage is a runtime setting
+  (`/模型`, admin-only to change), not a hardcoded constant — see below. Optionally, OpenAI
+  models (`gpt-5` / `gpt-5-mini`) can be selected per stage instead if `OPENAI_API_KEY` is set.
 - **LINE Messaging API** for the bot itself, plus a separate **LINE Login** channel for the
   LIFF app (LINE no longer allows LIFF apps on a Messaging API channel).
 
@@ -131,12 +134,14 @@ Realistically **close to $0/month** at friend-group scale. Where it could come f
 - **LINE Messaging API**: $0. Every reply the bot sends is a *reply* message (triggered by a
   command, using the event's reply token), which LINE doesn't charge for or count against any
   quota. The bot never sends push messages.
-- **Anthropic API**: the one real cost, billed per token. `claude-sonnet-5` organizes
-  (`$2`/`$10` per 1M input/output tokens), `claude-haiku-4-5` handles Q&A and fact-checking
-  (`$1`/`$5` per 1M input/output tokens). Organizing runs in small, capped batches (not one
-  call per message), and only when there's something new to fold in — an active trip with
-  a normal amount of chatter has cost well under $1/month in practice. `/花費` shows the
-  actual running total for your own trip, in USD, at any time.
+- **LLM API calls**: the one real cost, billed per token, to whichever provider `/模型` has
+  each stage set to. Default: `claude-sonnet-5` organizes (`$2`/`$10` per 1M input/output
+  tokens), `claude-haiku-4-5` handles Q&A and fact-checking (`$1`/`$5` per 1M input/output
+  tokens). If OpenAI is configured instead: `gpt-5` (`$1.25`/`$10`) or `gpt-5-mini`
+  (`$0.25`/`$2`). Organizing runs in small, capped batches (not one call per message), and
+  only when there's something new to fold in — an active trip with a normal amount of chatter
+  has cost well under $1/month in practice. `/花費` shows the actual running total for your
+  own trip, in USD, at any time.
 
 The one scenario worth knowing about: if the hourly cron sweep somehow falls behind for a
 long stretch (see `docs/plan.md`'s discoveries list for how that happened once during
@@ -194,12 +199,16 @@ npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put LINE_CHANNEL_SECRET
 npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
 npx wrangler secret put ADMIN_USER_ID   # optional - see below
+npx wrangler secret put OPENAI_API_KEY  # optional - see below
 ```
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and fill in the same values.
 
 `ADMIN_USER_ID` is optional: a LINE user ID that can end (or force-end) any trip regardless
 of who started it. Leave it unset if you don't want that override.
+
+`OPENAI_API_KEY` is optional: only needed if you want the `gpt5` / `gpt5mini` aliases in
+`/模型` to work (see below). Leave it unset to run on Claude models only.
 
 ### 5. Deploy and connect the webhook
 

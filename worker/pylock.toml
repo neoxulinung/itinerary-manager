@@ -18,6 +18,14 @@ version = "4.14.2"
 wheels = [{ url = "https://files.pythonhosted.org/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl", upload-time = 2026-07-12T20:29:05Z, size = 125813, hashes = { sha256 = "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494" } }]
 
 [[packages]]
+name = "distro"
+version = "1.9.0"
+wheels = [
+    { url = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/distro-1.9.0-py3-none-any.whl", hashes = { sha256 = "a73984180550abeb95c2913089a7829af2dea47359f973cbe2b269ddf00dba58" } },
+    { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hashes = { sha256 = "7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2" } },
+]
+
+[[packages]]
 name = "docstring-parser"
 version = "0.18.0"
 wheels = [{ url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", upload-time = 2026-04-14T04:09:18Z, size = 22484, hashes = { sha256 = "b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b" } }]
@@ -52,6 +60,11 @@ version = "0.9.0"
 wheels = [{ url = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/jiter-0.9.0-cp313-cp313-pyodide_2025_0_wasm32.whl", hashes = { sha256 = "c4a69d4f4580c7c2d06967e83c48462c8bac5e5f4e227d05cf432d53e952512a" } }]
 
 [[packages]]
+name = "openai"
+version = "2.2.0"
+wheels = [{ url = "https://files.pythonhosted.org/packages/cb/92/6aeef1836e66dfec7f7f160a4f06d7041be7f6ccfc47a2f0f5738b332245/openai-2.2.0-py3-none-any.whl", upload-time = 2025-10-06T18:08:11Z, size = 998972, hashes = { sha256 = "d222e63436e33f3134a3d7ce490dc2d2f146fa98036eb65cc225df3ce163916f" } }]
+
+[[packages]]
 name = "pydantic"
 version = "2.10.6"
 wheels = [
@@ -71,6 +84,11 @@ wheels = [
     { url = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/sniffio-1.3.1-py3-none-any.whl", hashes = { sha256 = "94160100b8695f765d7742d4d7cad8fe11a6ca9df48c49633cab5b3664fcf168" } },
     { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } },
 ]
+
+[[packages]]
+name = "tqdm"
+version = "4.70.0"
+wheels = [{ url = "https://files.pythonhosted.org/packages/f9/1c/01bfd571a64e7f270e6bab5e33777debe0edc56759233ce84f27dec92d14/tqdm-4.70.0-py3-none-any.whl", upload-time = 2026-07-27T11:33:13Z, size = 80184, hashes = { sha256 = "7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953" } }]
 
 [[packages]]
 name = "typing-extensions"

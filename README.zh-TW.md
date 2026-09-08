@@ -37,7 +37,7 @@
 | `/問 <問題>` | 只根據旅程文件回答，不會瞎猜，文件沒提到就說「還沒決定」。 | `/問 我們住哪間飯店` → 根據實際討論內容回答，或`⚠️ 還沒決定` |
 | `/未定事項` | 列出目前所有還沒決定的事項。 | `/未定事項` → 目前「未定事項」章節的純文字版本 |
 | `/懶人包` | 傳送LIFF頁面連結（時間軸、記帳、投票都在同一頁）。 | `/懶人包` → 一則連到LIFF頁面的LINE按鈕訊息 |
-| `/花費` | 顯示這趟旅程累積的Anthropic API花費。 | `/花費` → `🤖 這趟旅程：12次AI呼叫，約 US$0.0187（輸入9,204／輸出2,150 tokens）` |
+| `/花費` | 顯示這趟旅程累積的LLM API花費。 | `/花費` → `🤖 這趟旅程：12次AI呼叫，約 US$0.0187（輸入9,204／輸出2,150 tokens）` |
 | `/結算` | 顯示目前記帳結算狀況，不會結束旅程。 | `/結算` → 誰該付誰多少錢（貪心settle-up演算法算出來的） |
 
 **💰 記帳**
@@ -65,6 +65,7 @@
 | --- | --- | --- |
 | `/整理` | 手動觸發整理（平常每小時會自動跑一次）。 | `/整理` → `✅ 整理完成，處理了 8 則訊息。`或`⚠️ 目前沒有新訊息可整理` |
 | `/檢查` | 查看查核機制有沒有抓到跟原始訊息對不上的可疑內容。 | `/檢查` → 可疑內容清單＋原因，或`✅ 目前沒有發現可疑內容` |
+| `/模型` | 查看整理／問答／查核三個階段各用哪個模型；帶參數可修改（僅限管理員）。 | `/模型` → 目前設定清單；`/模型 整理 sonnet` → `✅ 已把「整理」的模型設定為 claude-sonnet-5` |
 | `/說明` | 顯示完整指令列表。 | — |
 
 ## 部署前該知道的設計決策
@@ -79,7 +80,7 @@
 - **Cloudflare Python Workers**（Pyodide執行環境）撐起整個後端——一個`fetch()` handler處理LINE webhook跟LIFF的API，一個`scheduled()` handler每小時掃描並整理/查核。
 - **D1**（SQLite）存所有關聯式資料：訊息、旅程文件跟版本歷史、記帳、投票、LLM花費追蹤。
 - **R2**存照片備份。
-- **Anthropic API**（整理用`claude-sonnet-5`、問答跟查核用`claude-haiku-4-5`）透過官方Python SDK呼叫——同步client在Workers環境下用不了，必須用`AsyncAnthropic`。
+- **Anthropic API**（預設整理用`claude-sonnet-5`、問答跟查核用`claude-haiku-4-5`）透過官方Python SDK呼叫——同步client在Workers環境下用不了，必須用`AsyncAnthropic`。每個階段實際用哪個模型是執行期可調的設定（`/模型`，僅限管理員修改），不是寫死的常數，見下方。也可以選用OpenAI模型（`gpt-5`／`gpt-5-mini`）取代，只要設定了`OPENAI_API_KEY`。
 - **LINE Messaging API**負責Bot本體，另外需要一個獨立的**LINE Login** channel給LIFF app用（LINE政策已不允許LIFF掛在Messaging API channel下）。
 
 有一個比較特殊、值得知道的平台限制，如果要動webhook那條路徑的話：Cloudflare的`fetch()` handler有一個大約30秒的硬性執行上限，而且被平台強制中斷時**不會產生Python看得到的例外**，所以`try/except`有時候完全補不到。每小時的cron排程（`scheduled()`）不受這個限制，有自己獨立大約15分鐘的執行時間額度——這是為什麼任何可能跑比較久的工作都應該靠它，而不是webhook路徑。完整的來龍去脈記錄在`docs/plan.md`的發現清單裡。
@@ -90,7 +91,7 @@
 
 - **Cloudflare（Workers、D1、R2、Cron Trigger）**：免費額度就夠用。一趟旅程的訊息量、D1讀寫次數、照片儲存空間，都遠遠碰不到免費額度的上限（Workers：每天10萬次請求；D1：5GB儲存空間、每天500萬次讀取＋10萬次寫入；R2：10GB儲存空間、沒有流量費）。這個專案開發至今從沒需要升級付費方案。
 - **LINE Messaging API**：0元。Bot所有的回覆都是「reply訊息」（由指令觸發、用事件自帶的reply token），LINE不會針對這種訊息收費，也不計入任何額度。Bot完全不會主動發送push訊息。
-- **Anthropic API**：唯一真正會花錢的地方，按token計費。整理用`claude-sonnet-5`（每100萬input/output tokens各`$2`／`$10`），問答跟查核用`claude-haiku-4-5`（每100萬input/output tokens各`$1`／`$5`）。整理是批次處理、有上限，不是每則訊息都打一次API，而且只有真的有新內容待整理時才會呼叫——實測一趟正常聊天量的旅程，一個月的花費遠低於1美金。用`/花費`隨時可以查到你這趟旅程實際累積的美金花費。
+- **LLM API呼叫**：唯一真正會花錢的地方，按token計費，實際費率看`/模型`把各階段設成哪個模型。預設：整理用`claude-sonnet-5`（每100萬input/output tokens各`$2`／`$10`），問答跟查核用`claude-haiku-4-5`（各`$1`／`$5`）。若改設OpenAI：`gpt-5`（各`$1.25`／`$10`）或`gpt-5-mini`（各`$0.25`／`$2`）。整理是批次處理、有上限，不是每則訊息都打一次API，而且只有真的有新內容待整理時才會呼叫——實測一趟正常聊天量的旅程，一個月的花費遠低於1美金。用`/花費`隨時可以查到你這趟旅程實際累積的美金花費。
 
 有一個值得知道的情境：如果每小時的cron排程因為某些原因連續好幾次沒有成功清完積壓訊息（開發過程中真的發生過一次，細節記在`docs/plan.md`的發現清單裡），積壓的內容只是需要多跑幾個批次才能清完，**不會**變成無限重試迴圈、也不會因此讓花費暴增——`max_retries=0`就是特意為了避免這種情況設的。
 
@@ -139,11 +140,14 @@ npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put LINE_CHANNEL_SECRET
 npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
 npx wrangler secret put ADMIN_USER_ID   # 選填，見下方說明
+npx wrangler secret put OPENAI_API_KEY  # 選填，見下方說明
 ```
 
 本機開發的話，把`.dev.vars.example`複製成`.dev.vars`，填入一樣的值。
 
 `ADMIN_USER_ID`是選填的：設定後，這個LINE user ID可以結束（或強制結束）任何旅程，不受「只有開始的人能結束」限制。不需要這個功能的話留空即可。
+
+`OPENAI_API_KEY`是選填的：只有想讓`/模型`裡的`gpt5`／`gpt5mini`這兩個別名能用才需要設定（見下方）。不設定的話就只能用Claude模型。
 
 ### 5. Deploy並接上webhook
 

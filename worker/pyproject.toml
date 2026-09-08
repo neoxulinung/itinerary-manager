@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "LINE group trip planning assistant"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["anthropic", "httpx", "httpx2"]
+dependencies = ["anthropic", "httpx", "httpx2", "openai"]
 
 [dependency-groups]
 dev = ["workers-py", "workers-runtime-sdk"]

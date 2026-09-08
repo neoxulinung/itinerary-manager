@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from workers import Response, WorkerEntrypoint
 
-from claude_client import MODEL_ALIASES, PURPOSE_LABELS, model_settings_text, set_model, usage_summary
+from llm_client import MODEL_ALIASES, PURPOSE_LABELS, model_settings_text, set_model, usage_summary
 from expenses import (
     add_expense,
     default_participants,

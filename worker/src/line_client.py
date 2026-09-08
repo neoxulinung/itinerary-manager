@@ -10,7 +10,7 @@ LINE_API = "https://api.line.me/v2/bot"
 
 # httpx.AsyncClient() defaults to Timeout(5.0) - 5s for connect too. Same Cloudflare
 # Worker-to-external-API TLS handshake latency that hit the Anthropic client (see
-# claude_client.py / docs/plan.md item 11) applies here just as much; widen the same way.
+# llm_client.py / docs/plan.md item 11) applies here just as much; widen the same way.
 _TIMEOUT = httpx.Timeout(30.0, connect=30.0)
 
 
