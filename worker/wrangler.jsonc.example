@@ -1,0 +1,58 @@
+/**
+ * Copy this file to wrangler.jsonc and fill in the placeholders below with your own
+ * Cloudflare resource IDs. See ../README.md ("Setup") for how to create each one.
+ *
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "itinerary-manager",
+	"main": "src/entry.py",
+	"compatibility_date": "2026-08-25",
+	"compatibility_flags": [
+		"python_workers"
+	],
+	"observability": {
+		"enabled": true
+	},
+	/**
+	 * Bindings
+	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
+	 * databases, object storage, AI inference, real-time communication and more.
+	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+	 */
+	"d1_databases": [
+		{
+			"binding": "DB",
+			// `wrangler d1 create itinerary-manager-db` - it prints both of these.
+			"database_name": "<your-d1-database-name>",
+			"database_id": "<your-d1-database-id>"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "PHOTOS",
+			// `wrangler r2 bucket create <a-globally-unique-name>` - bucket names are
+			// global across all Cloudflare accounts, so pick something unlikely to collide.
+			"bucket_name": "<your-r2-bucket-name>"
+		}
+	],
+	// Every hour, sweep active trips and batch-organize any pending messages:
+	"triggers": { "crons": ["0 * * * *"] },
+	/**
+	 * Environment Variables
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
+	 * Note: Use secrets (`wrangler secret put`) for sensitive data - see the README for the
+	 * full list of secrets this project needs (ANTHROPIC_API_KEY, LINE_CHANNEL_SECRET,
+	 * LINE_CHANNEL_ACCESS_TOKEN, and optionally ADMIN_USER_ID).
+	 */
+	"vars": {
+		// Enable public access on the R2 bucket above, then paste the "r2.dev" URL it gives
+		// you (or your own custom domain if you've mapped one to the bucket).
+		"R2_PUBLIC_BASE_URL": "<your-r2-public-base-url>",
+		// From the LINE Login channel you create for the LIFF app (separate from the
+		// Messaging API channel - see README).
+		"LIFF_ID": "<your-liff-id>"
+	}
+}
