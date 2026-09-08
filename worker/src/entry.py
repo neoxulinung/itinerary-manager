@@ -28,6 +28,7 @@ from organize import (
     extract_undecided_section,
     get_doc_content,
     organize_trip,
+    save_doc_revision,
     to_line_plaintext,
 )
 from polls import (
@@ -149,6 +150,15 @@ class Default(WorkerEntrypoint):
             trip_id = segments[2]
             if len(segments) == 3 and method == "GET":
                 return await self._get_trip_api(trip_id)
+            if len(segments) == 4 and segments[3] == "doc" and method == "PATCH":
+                return await self._update_doc_api(request, trip_id)
+            if len(segments) == 5 and segments[3] == "doc" and segments[4] == "revisions" and method == "GET":
+                return await self._list_doc_revisions_api(trip_id)
+            if (
+                len(segments) == 7 and segments[3] == "doc" and segments[4] == "revisions"
+                and segments[6] == "restore" and method == "POST"
+            ):
+                return await self._restore_doc_revision_api(request, trip_id, segments[5])
             if len(segments) == 4 and segments[3] == "expenses" and method == "POST":
                 return await self._create_expense_api(request, trip_id)
             if len(segments) == 5 and segments[3] == "expenses" and method == "PATCH":
@@ -195,6 +205,63 @@ class Default(WorkerEntrypoint):
     async def _expense_belongs_to_trip(self, expense_id: str, trip_id: str) -> bool:
         row = await self.env.DB.prepare("SELECT 1 FROM expenses WHERE id = ? AND trip_id = ?").bind(expense_id, trip_id).all()
         return bool(row.results)
+
+    async def _update_doc_api(self, request, trip_id: str):
+        body = json.loads(await request.text())
+        content_md = body.get("content_md")
+        user_id = body.get("userId")
+        if not content_md or not user_id:
+            return Response.json({"error": "missing content_md or userId"}, status=400)
+        display_name = body.get("displayName") or user_id
+        try:
+            await save_doc_revision(
+                self.env, trip_id, content_md,
+                edited_by_user_id=user_id, edited_by_display_name=display_name,
+            )
+        except ValueError as e:
+            return Response.json({"error": str(e)}, status=400)
+        return Response.json({"ok": True})
+
+    async def _list_doc_revisions_api(self, trip_id: str):
+        # Full content_md per row, not a diff/summary - same "return everything in one shot"
+        # shape the rest of this API already uses (expenses, poll options). LIMIT 30 bounds it
+        # to a trip's recent history rather than every organize tick since the trip began.
+        rows = await self.env.DB.prepare(
+            "SELECT id, content_md, edited_by_display_name, created_at FROM trip_doc_revisions "
+            "WHERE trip_id = ? ORDER BY created_at DESC LIMIT 30"
+        ).bind(trip_id).all()
+        revisions = [
+            {
+                "id": r["id"],
+                "content_md": r["content_md"],
+                "editor": r["edited_by_display_name"] or "🤖 AI整理",
+                "created_at": r["created_at"],
+            }
+            for r in rows.results
+        ]
+        return Response.json({"revisions": revisions})
+
+    async def _restore_doc_revision_api(self, request, trip_id: str, revision_id: str):
+        row = await self.env.DB.prepare(
+            "SELECT content_md FROM trip_doc_revisions WHERE id = ? AND trip_id = ?"
+        ).bind(revision_id, trip_id).all()
+        if not row.results:
+            return Response.json({"error": "not found"}, status=404)
+        body = json.loads(await request.text())
+        user_id = body.get("userId")
+        if not user_id:
+            return Response.json({"error": "missing userId"}, status=400)
+        display_name = body.get("displayName") or user_id
+        # A restore is just another edit, recorded as its own new revision - never deletes or
+        # rewrites history, so restoring an even-older version afterwards is always possible.
+        try:
+            await save_doc_revision(
+                self.env, trip_id, row.results[0]["content_md"],
+                edited_by_user_id=user_id, edited_by_display_name=display_name,
+            )
+        except ValueError as e:
+            return Response.json({"error": str(e)}, status=400)
+        return Response.json({"ok": True})
 
     async def _add_poll_option_api(self, request, trip_id: str, poll_id: str):
         poll = await self._get_poll_scoped(poll_id, trip_id)

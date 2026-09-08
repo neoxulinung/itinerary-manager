@@ -48,6 +48,11 @@ CREATE TABLE trip_doc_revisions (
   trip_id TEXT NOT NULL REFERENCES trips(id),
   content_md TEXT NOT NULL,
   triggered_by_message_id TEXT REFERENCES messages(id),
+  -- NULL for an LLM-triggered revision (triggered_by_message_id is set instead); set for a
+  -- manual edit or a restore-to-this-version from the LIFF page (triggered_by_message_id is
+  -- NULL in that case). Never both - each revision has exactly one cause.
+  edited_by_user_id TEXT,
+  edited_by_display_name TEXT,
   created_at INTEGER NOT NULL
 );
 

@@ -75,6 +75,41 @@ async def get_doc_content(env, trip_id: str) -> str | None:
 UNDECIDED_HEADING = "## 未定事項"
 
 
+def validate_doc(doc: str) -> None:
+    # Found live: the LLM can drop "# <trip name>" or "## 未定事項" entirely while leaving
+    # everything else intact - no error, just a doc other features quietly can't parse anymore
+    # (extract_undecided_section, and anything reading UNDECIDED_HEADING verbatim). A manual
+    # edit from the LIFF page carries the same risk from one stray keystroke. Shared by every
+    # writer of trip_docs (see save_doc_revision) so nothing - LLM output, a manual edit, or a
+    # restore - can ever persist a doc the rest of the app can no longer parse.
+    if not doc.strip().startswith("# "):
+        raise ValueError("文件開頭必須是「# 旅程名稱」")
+    if UNDECIDED_HEADING not in doc:
+        raise ValueError(f"文件必須包含「{UNDECIDED_HEADING}」這個標題，不能刪除或改名")
+
+
+async def save_doc_revision(
+    env, trip_id: str, content_md: str, *,
+    triggered_by_message_id: str | None = None,
+    edited_by_user_id: str | None = None,
+    edited_by_display_name: str | None = None,
+) -> None:
+    validate_doc(content_md)
+    now = int(time.time())
+    await env.DB.prepare(
+        "INSERT INTO trip_docs (trip_id, content_md, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(trip_id) DO UPDATE SET content_md = excluded.content_md, updated_at = excluded.updated_at"
+    ).bind(trip_id, content_md, now).run()
+    await env.DB.prepare(
+        "INSERT INTO trip_doc_revisions "
+        "(id, trip_id, content_md, triggered_by_message_id, edited_by_user_id, edited_by_display_name, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).bind(
+        str(uuid.uuid4()), trip_id, content_md, triggered_by_message_id, edited_by_user_id,
+        edited_by_display_name, now,
+    ).run()
+
+
 def extract_undecided_section(doc: str) -> str:
     idx = doc.find(UNDECIDED_HEADING)
     if idx == -1:
@@ -197,34 +232,15 @@ async def organize_trip(
     )
     new_doc = new_doc.strip() or current_doc
 
-    # Same safety net as the heading check below, for the H1 title: found live in this same
-    # session - the LLM can drop "# <trip name>" entirely while still keeping every other
-    # section intact (no error, just a title-less doc from then on, since nothing re-adds a
-    # title the model isn't being asked to change). Cheap enough to just require it stays put.
-    if not new_doc.strip().startswith("# "):
-        raise ValueError("organize_trip: LLM output dropped the '# <trip name>' title line, discarding")
-
-    if UNDECIDED_HEADING not in new_doc:
-        # The rest of the app parses this heading verbatim (extract_undecided_section) - an
-        # LLM output that drops it would silently break /未定事項. Refuse to persist a doc
-        # that can't be parsed; leave this batch's organized_at unset so the next run (cron
-        # or manual /整理) retries it instead of losing it.
-        raise ValueError(f"organize_trip: LLM output dropped '{UNDECIDED_HEADING}' heading, discarding")
-
-    now = int(time.time())
+    # validate_doc raises (and this batch's organized_at stays unset, so the next run - cron or
+    # manual /整理 - retries it) if the LLM dropped the "# <trip name>" title or "## 未定事項"
+    # heading - found live, both have happened while the rest of the doc stayed intact.
     last_message_id = rows[-1]["id"]
     changed = new_doc != current_doc
-
     if changed:
-        await env.DB.prepare(
-            "INSERT INTO trip_docs (trip_id, content_md, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(trip_id) DO UPDATE SET content_md = excluded.content_md, updated_at = excluded.updated_at"
-        ).bind(trip_id, new_doc, now).run()
-        await env.DB.prepare(
-            "INSERT INTO trip_doc_revisions (id, trip_id, content_md, triggered_by_message_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?)"
-        ).bind(str(uuid.uuid4()), trip_id, new_doc, last_message_id, now).run()
+        await save_doc_revision(env, trip_id, new_doc, triggered_by_message_id=last_message_id)
 
+    now = int(time.time())
     ids_placeholder = ", ".join("?" for _ in rows)
     await env.DB.prepare(
         f"UPDATE messages SET organized_at = ? WHERE id IN ({ids_placeholder})"

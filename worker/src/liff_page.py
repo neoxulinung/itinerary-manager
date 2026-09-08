@@ -56,6 +56,7 @@ let TRIP_ID = null;
 let TRIP_DATA = null;
 let ME = null;           // { userId, displayName } from liff.getProfile()
 let EDITING_ID = null;   // expense id being edited, or null for "create new"
+let DOC_HISTORY = [];    // last fetched revisions list, for viewDocRevision(index) to read back
 
 function escapeHtml(s) {
   // Covers all five characters that matter in both text and (double-quoted) attribute
@@ -108,7 +109,20 @@ function render(data) {
 
   document.getElementById('page').innerHTML =
     '<span class="status ' + data.status + '">' + statusLabel + '</span>' +
-    itineraryBody +
+    '<div style="margin:6px 0 10px;">' +
+      '<button class="link-btn" onclick="startDocEdit()">✏️ 編輯文件</button>　' +
+      '<button class="link-btn" onclick="toggleDocHistory()">🕘 編輯紀錄</button>' +
+    '</div>' +
+    '<div id="docView">' + itineraryBody + '</div>' +
+    '<div id="docEditForm" style="display:none">' +
+      '<textarea id="docTextarea" style="width:100%; box-sizing:border-box; min-height:280px; ' +
+        'font-family:monospace; font-size:13px; padding:10px; border:1px solid #ddd; border-radius:6px;"></textarea>' +
+      '<div style="margin-top:8px;">' +
+        '<button class="primary-btn" onclick="submitDocEdit()">儲存</button>' +
+        '<button class="link-btn" onclick="cancelDocEdit()">取消</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="docHistory" style="display:none"></div>' +
     '<h2>💰 記帳</h2>' +
     '<pre id="settlementText"></pre>' +
     '<div id="expenseList"></div>' +
@@ -121,6 +135,107 @@ function render(data) {
     '<p style="color:#888">還沒有任何帳目</p>';
   renderParticipantChecks(data.participants);
   document.getElementById('pollSection').innerHTML = renderPoll(data.poll);
+}
+
+function startDocEdit() {
+  document.getElementById('docHistory').style.display = 'none';
+  document.getElementById('docView').style.display = 'none';
+  document.getElementById('docTextarea').value = TRIP_DATA.content_md || '';
+  document.getElementById('docEditForm').style.display = 'block';
+}
+
+function cancelDocEdit() {
+  document.getElementById('docEditForm').style.display = 'none';
+  document.getElementById('docView').style.display = 'block';
+}
+
+async function submitDocEdit() {
+  if (!ME || !ME.userId) {
+    alert('無法取得你的LINE身分，請確認是在LINE App內開啟這個頁面');
+    return;
+  }
+  const content_md = document.getElementById('docTextarea').value;
+  try {
+    await api('/api/trips/' + TRIP_ID + '/doc', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content_md, userId: ME.userId, displayName: ME.displayName }),
+    });
+    await loadTrip();
+  } catch (e) {
+    // 400 = validate_doc rejected it (missing title or 未定事項 heading) - the only failure
+    // mode worth a specific message, since it's the one thing an editor can actually fix.
+    alert(e.status === 400 ? '儲存失敗：文件開頭要有「# 旅程名稱」，且不能刪掉「## 未定事項」這個標題' : '儲存失敗，請稍後再試');
+  }
+}
+
+async function toggleDocHistory() {
+  const el = document.getElementById('docHistory');
+  if (el.style.display !== 'none') {
+    el.style.display = 'none';
+    return;
+  }
+  document.getElementById('docEditForm').style.display = 'none';
+  document.getElementById('docView').style.display = 'block';
+  try {
+    const data = await api('/api/trips/' + TRIP_ID + '/doc/revisions');
+    DOC_HISTORY = data.revisions;
+    el.innerHTML = renderDocHistory(DOC_HISTORY);
+    el.style.display = 'block';
+  } catch (e) {
+    alert('讀取編輯紀錄失敗，請稍後再試');
+  }
+}
+
+function renderDocHistory(revisions) {
+  if (!revisions.length) return '<p style="color:#888">還沒有任何紀錄</p>';
+  return revisions.map((r, i) => {
+    const time = new Date(r.created_at * 1000).toLocaleString('zh-TW', { hour12: false });
+    return '<div class="card"><div class="row">' +
+      '<div><strong>' + escapeHtml(r.editor) + '</strong><div class="meta">' + time + '</div></div>' +
+      '<div>' +
+        '<button onclick="viewDocRevision(' + i + ')">查看</button> ' +
+        '<button onclick="restoreDocRevision(\\'' + r.id + '\\')">還原到這版</button>' +
+      '</div>' +
+    '</div></div>';
+  }).join('');
+}
+
+function viewDocRevision(index) {
+  const r = DOC_HISTORY[index];
+  if (!r) return;
+  document.getElementById('docHistory').style.display = 'none';
+  document.getElementById('docEditForm').style.display = 'none';
+  const time = new Date(r.created_at * 1000).toLocaleString('zh-TW', { hour12: false });
+  const view = document.getElementById('docView');
+  view.style.display = 'block';
+  view.innerHTML =
+    '<div class="card">' +
+      '<div class="meta">正在查看歷史版本：' + escapeHtml(r.editor) + '　' + time + '</div>' +
+      '<div style="margin-top:8px;">' +
+        '<button onclick="render(TRIP_DATA)">↩️ 返回目前版本</button> ' +
+        '<button onclick="restoreDocRevision(\\'' + r.id + '\\')">還原到這版</button>' +
+      '</div>' +
+    '</div>' +
+    DOMPurify.sanitize(marked.parse(decorateHeadings(r.content_md)));
+}
+
+async function restoreDocRevision(revisionId) {
+  if (!ME || !ME.userId) {
+    alert('無法取得你的LINE身分，請確認是在LINE App內開啟這個頁面');
+    return;
+  }
+  if (!confirm('確定要還原到這個版本嗎？目前的內容不會被刪除，會留在編輯紀錄裡。')) return;
+  try {
+    await api('/api/trips/' + TRIP_ID + '/doc/revisions/' + revisionId + '/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: ME.userId, displayName: ME.displayName }),
+    });
+    await loadTrip();
+  } catch (e) {
+    alert('還原失敗，請稍後再試');
+  }
 }
 
 function renderPoll(poll) {

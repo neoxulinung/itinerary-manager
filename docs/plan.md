@@ -260,7 +260,30 @@ Phase A把model選擇做成資料庫設定後才發現：provider抽象其實幾
 
 **踩到的坑（提早避開，沒有真的在production炸過）**：Phase A那次修`claude_client.py`時才發現sonnet-5會不受控制地吐一段`thinking`內容、吃光`max_tokens`額度，加`thinking={"type": "disabled"}`才解決。GPT-5一樣是有內建reasoning的模型，Chat Completions API預設也會用一部分`max_completion_tokens`額度做看不到的reasoning——同一種坑，這次直接在`_call_openai`裡加`reasoning_effort="minimal"`跳過，不用等真的在正式環境撞到才修。另外Chat Completions對reasoning模型要求用`max_completion_tokens`而不是舊的`max_tokens`參數，兩家API的timeout物件也不同型別（`httpx2.Timeout` vs. `httpx.Timeout`，OpenAI SDK底層用的是一般`httpx`，跟`line_client.py`共用同一個Cloudflare Emscripten相容的vendored版本，不需要`httpx2`那個Anthropic專屬的fork）。
 
-**技術可行性驗證**：`openai` PyPI套件（連同它的依賴`distro`/`jiter`/`tqdm`等）已確認能透過`pywrangler sync`解析成純Python／pyodide wasm wheel裝進`python_modules`，沒有C extension相依問題——這是這次真正要驗證的風險（過去踩`httpx2_jsfetch`的坑就是Cloudflare這個Pyodide執行環境的特殊限制，擔心OpenAI SDK也會有類似地雷），目前看起來沒事，但實際一次真正的line上呼叫還是要等設定好`OPENAI_API_KEY`才能驗證到底。
+**技術可行性驗證**：`openai` PyPI套件（連同它的依賴`distro`/`jiter`/`tqdm`等）已確認能透過`pywrangler sync`解析成純Python／pyodide wasm wheel裝進`python_modules`，沒有C extension相依問題——這是這次真正要驗證的風險（過去踩`httpx2_jsfetch`的坑就是Cloudflare這個Pyodide執行環境的特殊限制，擔心OpenAI SDK也會有類似地雷）。實測驗證：本機`wrangler dev`切成`gpt-5-mini`跑`/整理`，真的打到OpenAI拿到回應、正確算出費用、文件格式也通過結構檢查，整條路徑（`/模型`切換→`get_model`→`call_llm`分派→實際API呼叫→寫回文件）在真實Pyodide執行環境下完整跑通。
+
+**cron整理的timeout後續調整**：`connect_timeout`從90秒拉到300秒（給連線更多自行恢復的時間），`read_timeout`同步從600秒降到300秒，讓兩者相加的最壞情況維持在~600秒左右，不會逼近cron的15分鐘執行上限、吃光`fact_check_trip`跟其他旅程要用的預算。
+
+---
+
+## LIFF頁面手動編輯文件＋編輯紀錄（MVP後新增）
+
+使用者可以直接在LIFF頁面編輯AI整理出來的旅程文件（不只是唯讀），並且能看到「誰、什麼時候改的」、改錯了可以還原。
+
+**核心洞察**：`trip_doc_revisions`這張表本來就已經在記錄每次AI整理留下的版本（`organize_trip`每次改動文件都會寫一筆），所以手動編輯不需要另外設計一套儲存機制——只要讓手動編輯／還原也寫進同一張表，並多存「是誰改的」，AI整理跟手動編輯的歷史就會自然接在同一條時間軸上。
+
+**資料庫**：`trip_doc_revisions`加兩個可為空的欄位`edited_by_user_id`／`edited_by_display_name`。AI整理寫入時這兩欄是空的（`triggered_by_message_id`有值）；手動編輯或還原寫入時這兩欄有值（`triggered_by_message_id`是空的）——一張表就能分辨每筆版本的來源。
+
+**還原＝再存一筆新版本，不是改回去**：按下「還原到這版」不會刪除或覆蓋中間的歷史，而是把舊版本的內容重新存成一筆新的版本（作者記成按下還原的人）。這樣歷史紀錄永遠不會被銷毀——A還原到舊版本後，B還是可以再還原回A改之前的版本。
+
+**共用驗證**：新增`organize.py`的`validate_doc()`／`save_doc_revision()`兩個函式，把原本寫死在`organize_trip`裡的結構檢查（文件開頭要有`# 標題`、必須包含`## 未定事項`）抽出來共用——不管是AI整理、手動編輯、還是還原，寫入`trip_docs`之前都會過同一關檢查。原因：`/未定事項`這類指令直接解析`## 未定事項`這個標題，手動編輯如果不小心刪掉會讓其他功能默默壞掉，跟AI整理曾經漏掉標題是同一種風險，值得共用同一個安全網而不是只顧OpenAI的路徑。
+
+**新增API**（都在`entry.py`，比照現有記帳/投票API的權限模式——群組裡任何人都能呼叫，身分是LIFF頁面`liff.getProfile()`給的`userId`/`displayName`，後端不做額外驗證，跟這個app一貫的信任模型一致）：
+- `PATCH /api/trips/<id>/doc`：手動編輯，格式不符會回400並附上具體錯誤訊息。
+- `GET /api/trips/<id>/doc/revisions`：列出最近30筆版本（含完整內容），AI整理的顯示「🤖 AI整理」，手動編輯／還原顯示編輯者名字。
+- `POST /api/trips/<id>/doc/revisions/<rev_id>/restore`：還原到指定版本（內部呼叫跟手動編輯同一個`save_doc_revision`）。
+
+**前端**：文件區塊旁加「✏️編輯文件」（切換成純文字`<textarea>`直接編輯markdown原文，沒有做富文字編輯器）跟「🕘編輯紀錄」（列出時間軸，每筆可以「查看」完整內容或「還原到這版」，還原前有`confirm()`二次確認）兩個按鈕。
 
 ---
 
